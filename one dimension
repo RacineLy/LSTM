@@ -1,0 +1,156 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jul 30 22:02:41 2019
+
+@author: Racine LY
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from keras.models import Sequential
+from keras.layers import LSTM
+from keras.layers import Dropout
+from keras.layers import Dense
+
+# Load the entire dataset : train and test
+data_train = pd.read_csv(r'C:\Users\Racine LY\Documents\Deep_Learning_Models\LSTM_one_dimension\training_data.csv')
+data_test = pd.read_csv(r'C:\Users\Racine LY\Documents\Deep_Learning_Models\LSTM_one_dimension\test_data.csv')
+
+# Show 5 first lines of the training dataset
+data_train.iloc[0:5]
+
+# Retrieve useful informations for our model
+# We would like to forecast opening stock price which mean column 2 "Open"
+data_train = data_train.iloc[:,1:2].values
+data_test = data_test.iloc[:,1:2].values
+
+# Let's plot the training set and see what it looks like
+plt.figure(1, figsize = (15,5))
+plt.plot(data_train, label = 'Training set')
+plt.xlabel('Number of data points')
+plt.ylabel('Stock Price')
+plt.legend(loc = 'upper left', frameon = False)
+plt.savefig('Training_set_plot.png')
+
+# Retrieve dimensions and print x_train and x_test shapes
+m_train, n_train = data_train.shape
+m_test, n_test = data_test.shape
+
+# print it
+print('Your dataset for training is of shape: ' + str(data_train.shape))
+print('Your dataset for test is of shape: ' + str(data_test.shape))
+
+# Let's normalize the data with features' scaling
+# Features' scaling prevent the learning process to be slow due to data magnitude
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler(feature_range = (-1,1))
+data_train_scaled = scaler.fit_transform(data_train)
+data_test_scaled = scaler.fit_transform(data_test)
+
+# Let's create a block data_train_scaled + data_test_scaled
+data_scaled = np.concatenate((data_train_scaled,data_test_scaled))
+m, n = data_scaled.shape
+
+plt.figure(2, figsize = (15,5))
+plt.plot(data_scaled[0:m_train], 'k', label = 'Training set')
+plt.plot(np.arange(start = m_train, stop = m, step = 1),data_scaled[m_train:m], 'b', label = 'Test set')
+plt.xlabel('Number of data points')
+plt.ylabel('Stock Price')
+plt.legend(loc = 'upper left', frameon = False)
+plt.savefig('data_set_plot.png')
+
+print('Your entire dataset shape is: ' + str(data_scaled.shape))
+
+# Now we need to build the training set and the test set with the right dimensions for a LSTM model which mean 3D
+t_step = 60
+y_train = list()
+x_train = list()
+
+for i in range(t_step,m_train):
+    # Create temporary samples
+    sample_x_train = data_train_scaled[i-t_step:i]
+    sample_y_train = data_train_scaled[i]
+    
+    # Let's add a padding
+    if sample_x_train.shape[0] < t_step:
+        var = np.zeros((t_step - sample_x_train.shape[0]),1)
+        sample_x_train = np.concatenate((sample_x_train, var), axis = 0)
+        sample_y_train = np.concatenate((sample_y_train, var), axis = 0)
+    
+    # Adding to the lists x_train, y_train
+    x_train.append(sample_x_train)
+    y_train.append(sample_y_train)
+
+# Tranform the training features and labels into arrays
+x_train = np.array(x_train)
+y_train = np.array(y_train)
+
+# Let's do the same while we're here for our test set
+x_test = list()
+for i in range(m_train, m):
+    sample_x_test = data_scaled[i-t_step:i]
+    
+    # Let's add the padding
+    if sample_x_test.shape[0] < t_step:
+        var = np.zeros((t_step - sample_x_test.shape[0]),1)
+        sample_x_test = np.concatenate((sample_x_test, var), axis = 0)
+    
+    x_test.append(sample_x_test)
+    
+# Transform x_test into arrays
+x_test = np.array(x_test)
+y_test = np.array(scaler.fit_transform(data_test))
+
+# Print the dimensions
+print('Your training set shape is: ' + str(x_train.shape))
+print('Your training set labels shape is: ' + str(y_train.shape))
+print('Your test set shape is: ' + str(x_test.shape))
+print('Your test set labels shape is: ' + str(y_test.shape))
+
+# Let's build de model
+model = Sequential()
+model.add(LSTM(units = 50, activation = 'tanh', return_sequences = True, batch_size = (None, t_step, 1)))
+model.add(Dropout(0.1))
+model.add(LSTM(units = 50, activation = 'tanh', return_sequences = False))
+model.add(Dropout(0.1))
+model.add(Dense(units = 1))
+
+# Let's compile our model
+model.compile(optimizer = 'adam', loss = 'mse', metrics = ['accuracy'])
+
+# Let's start the training process
+n_boot = 10
+y_boot = np.zeros((m_test, n_boot))
+for i in range(n_boot):
+    history = model.fit(x_train, y_train, epochs = 5, batch_size = 32)
+    pred = model.predict(x_test)
+    pred = np.reshape(pred,(pred.shape[0]))
+    y_boot[:,i] = pred
+    
+# Compute median prédiction and CIs
+median = np.median(y_boot, axis = 1)
+roll_mean = np.mean(y_boot, axis = 1)
+roll_std = np.std(y_boot, axis = 1)
+
+# Plot the loss
+plt.figure(3, figsize = (15,5))
+plt.plot(history.history['loss'])
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+
+# Let's compare predictions and y_test
+abs = [i for i in range(m_train,m)]
+
+# Plot
+plt.figure(4, figsize= (10,5))
+plt.plot(abs, y_test, 'k', label = 'Observed')
+plt.plot(abs, median, 'r', label = 'Predicted')
+plt.fill_between(abs, roll_mean - 2*roll_std, roll_mean + 2*roll_std, color = 'green', alpha = 0.5, label = '95% confidence')
+plt.fill_between(abs, roll_mean - 3*roll_std, roll_mean + 3*roll_std, color = 'green', alpha = 0.3, label = '99% confidence')
+plt.xlabel('Indices in Dataset')
+plt.ylabel('Stock Price')
+plt.legend(loc = 'lower left', frameon = False)
+plt.savefig('Comparison_Obs_Pred.png')
+
+
